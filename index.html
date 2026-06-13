@@ -341,16 +341,16 @@
 </div>
 <!-- Controls -->
 <div class="w-full flex justify-between items-center mb-12">
-<button class="text-zinc-500" onclick="showToast('Aleatorio: Próximamente')"><span class="material-symbols-outlined text-2xl" data-icon="shuffle">shuffle</span></button>
+<button id="shuffle-btn" class="text-zinc-500 hover:text-primary transition-colors duration-200" onclick="toggleShuffle()"><span class="material-symbols-outlined text-2xl" data-icon="shuffle">shuffle</span></button>
 <button class="text-on-surface" onclick="prevSong()"><span class="material-symbols-outlined text-4xl fill-icon" data-icon="skip_previous">skip_previous</span></button>
 <button class="w-20 h-20 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-xl shadow-primary/20 transform active:scale-90 duration-200" onclick="togglePlayback()">
 <span class="material-symbols-outlined text-5xl fill-icon" data-icon="play_arrow" id="player-play-icon">play_arrow</span>
 </button>
 <button class="text-on-surface" onclick="nextSong()"><span class="material-symbols-outlined text-4xl fill-icon" data-icon="skip_next">skip_next</span></button>
-<button class="text-zinc-500" onclick="showToast('Repetir: Próximamente')"><span class="material-symbols-outlined text-2xl" data-icon="repeat">repeat</span></button>
+<button id="repeat-btn" class="text-primary hover:text-primary transition-colors duration-200" onclick="toggleRepeat()"><span class="material-symbols-outlined text-2xl" data-icon="repeat">repeat</span></button>
 </div>
 <div class="w-full flex justify-center">
-<button class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500" onclick="showToast('Dispositivos: Próximamente')">
+<button id="devices-btn" class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-primary transition-colors active:scale-95 duration-200" onclick="selectDevice()">
 <span class="material-symbols-outlined text-lg" data-icon="speaker_group">speaker_group</span>
             Dispositivos
         </button>
@@ -590,6 +590,9 @@
     let uploadedSongs = JSON.parse(localStorage.getItem('NocturnalUploadedSongs')) || [];
     let currentSongToAdd = null;
     const blobUrlCache = {};
+    let isShuffle = false;
+    let repeatMode = 'all'; // 'off' | 'all' | 'one'
+    let originalQueue = [];
 
     function formatTime(seconds) {
         if (isNaN(seconds)) return "0:00";
@@ -626,20 +629,38 @@
             const indexUrl = originalUrl || audioUrl;
             
             if (queue) {
-                currentQueue = [...queue]; // Create a copy
-                if (forceIndex !== null) {
-                    currentIndex = forceIndex;
-                } else {
-                    const foundIndex = currentQueue.findIndex(s => s.audioUrl === indexUrl);
-                    if (foundIndex !== -1) {
-                        currentIndex = foundIndex;
-                    } else {
-                        currentQueue.unshift({ title, artist, art, audioUrl: indexUrl });
+                originalQueue = [...queue];
+                if (isShuffle) {
+                    currentQueue = [...queue];
+                    if (currentQueue.length > 1) {
+                        const currentSong = originalQueue.find(s => s.audioUrl === indexUrl) || { title, artist, art, audioUrl: indexUrl };
+                        const rest = originalQueue.filter(s => s.audioUrl !== indexUrl);
+                        for (let i = rest.length - 1; i > 0; i--) {
+                            const j = Math.floor(Math.random() * (i + 1));
+                            [rest[i], rest[j]] = [rest[j], rest[i]];
+                        }
+                        currentQueue = [currentSong, ...rest];
                         currentIndex = 0;
+                    } else {
+                        currentIndex = 0;
+                    }
+                } else {
+                    currentQueue = [...queue];
+                    if (forceIndex !== null) {
+                        currentIndex = forceIndex;
+                    } else {
+                        const foundIndex = currentQueue.findIndex(s => s.audioUrl === indexUrl);
+                        if (foundIndex !== -1) {
+                            currentIndex = foundIndex;
+                        } else {
+                            currentQueue.unshift({ title, artist, art, audioUrl: indexUrl });
+                            currentIndex = 0;
+                        }
                     }
                 }
             } else if (currentQueue.length === 0 || (currentQueue[currentIndex]?.audioUrl !== indexUrl)) {
                 currentQueue = [{ title, artist, art, audioUrl: indexUrl }];
+                originalQueue = [...currentQueue];
                 currentIndex = 0;
             }
 
@@ -671,6 +692,7 @@
                     metadata.artwork = [{ src: art, sizes: '512x512', type: 'image/jpeg' }];
                 }
                 navigator.mediaSession.metadata = new MediaMetadata(metadata);
+                bindMediaSessionHandlers();
             }
 
             openPlayerUI();
@@ -691,8 +713,6 @@
                     updateUI();
                 });
             }
-
-            audio.onended = () => nextSong();
         } catch (err) {
             console.error("openPlayer error:", err);
         }
@@ -787,24 +807,129 @@
         }, 2000);
     }
 
-    // Media Session Action Handlers
-    if ('mediaSession' in navigator) {
-        navigator.mediaSession.setActionHandler('play', () => { 
-            explicitUserPause = false;
-            togglePlayback(); 
-        });
-        navigator.mediaSession.setActionHandler('pause', () => { 
-            explicitUserPause = true;
-            togglePlayback(); 
-        });
-        navigator.mediaSession.setActionHandler('previoustrack', () => { 
-            explicitUserPause = false;
-            prevSong(); 
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => { 
-            explicitUserPause = false;
-            nextSong(); 
-        });
+    function bindMediaSessionHandlers() {
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.setActionHandler('play', () => { 
+                explicitUserPause = false;
+                togglePlayback(); 
+            });
+            navigator.mediaSession.setActionHandler('pause', () => { 
+                explicitUserPause = true;
+                togglePlayback(); 
+            });
+            navigator.mediaSession.setActionHandler('previoustrack', () => { 
+                explicitUserPause = false;
+                prevSong(); 
+            });
+            navigator.mediaSession.setActionHandler('nexttrack', () => { 
+                explicitUserPause = false;
+                nextSong(); 
+            });
+        }
+    }
+
+    // Bind on load
+    bindMediaSessionHandlers();
+
+    function toggleShuffle() {
+        isShuffle = !isShuffle;
+        const shuffleBtn = document.getElementById('shuffle-btn');
+        
+        if (isShuffle) {
+            showToast('Modo aleatorio activado');
+            if (shuffleBtn) {
+                shuffleBtn.classList.remove('text-zinc-500');
+                shuffleBtn.classList.add('text-primary');
+            }
+            if (currentQueue.length > 1) {
+                const currentSong = currentQueue[currentIndex];
+                const rest = currentQueue.filter((_, idx) => idx !== currentIndex);
+                for (let i = rest.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [rest[i], rest[j]] = [rest[j], rest[i]];
+                }
+                currentQueue = [currentSong, ...rest];
+                currentIndex = 0;
+            }
+        } else {
+            showToast('Modo aleatorio desactivado');
+            if (shuffleBtn) {
+                shuffleBtn.classList.remove('text-primary');
+                shuffleBtn.classList.add('text-zinc-500');
+            }
+            if (originalQueue.length > 0) {
+                const currentSong = currentQueue[currentIndex];
+                currentQueue = [...originalQueue];
+                const foundIndex = currentQueue.findIndex(s => s.audioUrl === currentSong.audioUrl);
+                if (foundIndex !== -1) {
+                    currentIndex = foundIndex;
+                }
+            }
+        }
+    }
+
+    function toggleRepeat() {
+        const repeatBtn = document.getElementById('repeat-btn');
+        
+        if (repeatMode === 'off') {
+            repeatMode = 'all';
+            showToast('Repetir todo');
+            if (repeatBtn) {
+                repeatBtn.classList.remove('text-zinc-500');
+                repeatBtn.classList.add('text-primary');
+                repeatBtn.querySelector('span').innerText = 'repeat';
+            }
+        } else if (repeatMode === 'all') {
+            repeatMode = 'one';
+            showToast('Repetir una canción');
+            if (repeatBtn) {
+                repeatBtn.classList.remove('text-zinc-500');
+                repeatBtn.classList.add('text-primary');
+                repeatBtn.querySelector('span').innerText = 'repeat_one';
+            }
+        } else {
+            repeatMode = 'off';
+            showToast('Repetición desactivada');
+            if (repeatBtn) {
+                repeatBtn.classList.remove('text-primary');
+                repeatBtn.classList.add('text-zinc-500');
+                repeatBtn.querySelector('span').innerText = 'repeat';
+            }
+        }
+    }
+
+    async function selectDevice() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+            showToast("Usa el centro de control de tu móvil");
+            return;
+        }
+        try {
+            await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+            
+            if (audioOutputs.length === 0) {
+                showToast("Usa el menú AirPlay/Bluetooth de tu móvil");
+                return;
+            }
+            
+            const deviceNames = audioOutputs.map((d, i) => `${i + 1}. ${d.label || 'Dispositivo de audio'}`).join('\n');
+            const choice = prompt(`Selecciona salida de audio:\n\n${deviceNames}`);
+            if (choice) {
+                const idx = parseInt(choice) - 1;
+                if (idx >= 0 && idx < audioOutputs.length) {
+                    const device = audioOutputs[idx];
+                    if (audio.setSinkId) {
+                        await audio.setSinkId(device.deviceId);
+                        showToast(`Salida: ${device.label}`);
+                    } else {
+                        showToast("Navegador no compatible. Usa los ajustes del sistema.");
+                    }
+                }
+            }
+        } catch (err) {
+            showToast("Usa el menú AirPlay/Bluetooth del sistema");
+        }
     }
 
     function openPlayerUI() {
@@ -1641,6 +1766,7 @@
                 if (!isIDB && saved.audioUrl && !saved.audioUrl.startsWith('blob:')) {
                     audio.src = saved.audioUrl;
                     currentQueue = [{ title: saved.title, artist: saved.artist, art: saved.art, audioUrl: saved.audioUrl }];
+                    originalQueue = [...currentQueue];
                     currentIndex = 0;
                     // Auto-resume if music was playing when the user left
                     if (wasPlaying) {
