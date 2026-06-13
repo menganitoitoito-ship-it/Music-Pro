@@ -341,16 +341,16 @@
 </div>
 <!-- Controls -->
 <div class="w-full flex justify-between items-center mb-12">
-<button class="text-zinc-500"><span class="material-symbols-outlined text-2xl" data-icon="shuffle">shuffle</span></button>
+<button class="text-zinc-500" onclick="showToast('Aleatorio: Próximamente')"><span class="material-symbols-outlined text-2xl" data-icon="shuffle">shuffle</span></button>
 <button class="text-on-surface" onclick="prevSong()"><span class="material-symbols-outlined text-4xl fill-icon" data-icon="skip_previous">skip_previous</span></button>
 <button class="w-20 h-20 rounded-full bg-primary flex items-center justify-center text-on-primary shadow-xl shadow-primary/20 transform active:scale-90 duration-200" onclick="togglePlayback()">
 <span class="material-symbols-outlined text-5xl fill-icon" data-icon="play_arrow" id="player-play-icon">play_arrow</span>
 </button>
 <button class="text-on-surface" onclick="nextSong()"><span class="material-symbols-outlined text-4xl fill-icon" data-icon="skip_next">skip_next</span></button>
-<button class="text-zinc-500"><span class="material-symbols-outlined text-2xl" data-icon="repeat">repeat</span></button>
+<button class="text-zinc-500" onclick="showToast('Repetir: Próximamente')"><span class="material-symbols-outlined text-2xl" data-icon="repeat">repeat</span></button>
 </div>
 <div class="w-full flex justify-center">
-<button class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+<button class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500" onclick="showToast('Dispositivos: Próximamente')">
 <span class="material-symbols-outlined text-lg" data-icon="speaker_group">speaker_group</span>
             Dispositivos
         </button>
@@ -696,6 +696,9 @@
 
     async function nextSong() {
         try {
+            // Unlock audio context on iOS immediately
+            audio.play().catch(()=>{});
+
             if (!currentQueue || currentQueue.length === 0) return;
             
             currentIndex = (currentIndex + 1) % currentQueue.length;
@@ -722,6 +725,9 @@
 
     async function prevSong() {
         try {
+            // Unlock audio context on iOS immediately
+            audio.play().catch(()=>{});
+
             if (!currentQueue || currentQueue.length === 0) return;
             
             currentIndex = (currentIndex - 1 + currentQueue.length) % currentQueue.length;
@@ -949,6 +955,18 @@
       });
     }
 
+    // Global iOS Audio Unlocker
+    document.body.addEventListener('touchstart', function() {
+        if (audio.src === "" || audio.paused) {
+            audio.play().catch(()=>{});
+        }
+    }, { once: true });
+    document.body.addEventListener('click', function() {
+        if (audio.src === "" || audio.paused) {
+            audio.play().catch(()=>{});
+        }
+    }, { once: true });
+
     // --- Persistence (IndexedDB for Files, localStorage for Metadata) ---
     const DB_NAME = 'NocturnalDB';
     const STORE_NAME = 'audioFiles';
@@ -1006,6 +1024,9 @@
     }
 
     async function playSongFromIDB(song, queue) {
+        // Unlock audio context synchronously
+        audio.play().catch(()=>{});
+        
         try {
             const file = await getFile(song.audioUrl);
             if (file) {
@@ -1153,6 +1174,7 @@
             const div = document.createElement('div');
             div.className = "flex items-center gap-4 bg-surface-container-low/50 p-3 rounded-xl hover:bg-surface-container transition-colors cursor-pointer group";
             div.onclick = () => {
+                audio.play().catch(()=>{}); // Unlock iOS audio
                 const isIDB = song.audioUrl && song.audioUrl.startsWith('song-');
                 if (isIDB) {
                     playSongFromIDB(song, pl.songs);
@@ -1244,10 +1266,16 @@
     }
 
     function playPlaylist(id) {
+        audio.play().catch(()=>{}); // Unlock iOS audio
         const pl = playlists.find(p => p.id === id);
         if (pl && pl.songs.length > 0) {
             const song = pl.songs[0];
-            openPlayer(song.title, song.artist, song.art, song.audioUrl, pl.songs);
+            const isIDB = song.audioUrl && song.audioUrl.startsWith('song-');
+            if (isIDB) {
+                playSongFromIDB(song, pl.songs);
+            } else {
+                openPlayer(song.title, song.artist, song.art, song.audioUrl, pl.songs);
+            }
         } else {
             alert("¡Esta playlist está vacía! Añade algunas canciones desde Explorar.");
         }
