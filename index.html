@@ -614,7 +614,7 @@
         if (screenId === 'perfil') updateStats();
     }
 
-    function openPlayer(title, artist, art, audioUrl, queue = null, originalUrl = null) {
+    function openPlayer(title, artist, art, audioUrl, queue = null, originalUrl = null, forceIndex = null) {
         try {
             // Show mini player if hidden
             document.getElementById('mini-player').classList.remove('hidden');
@@ -623,12 +623,16 @@
             
             if (queue) {
                 currentQueue = [...queue]; // Create a copy
-                const foundIndex = currentQueue.findIndex(s => s.audioUrl === indexUrl);
-                if (foundIndex !== -1) {
-                    currentIndex = foundIndex;
+                if (forceIndex !== null) {
+                    currentIndex = forceIndex;
                 } else {
-                    currentQueue.unshift({ title, artist, art, audioUrl: indexUrl });
-                    currentIndex = 0;
+                    const foundIndex = currentQueue.findIndex(s => s.audioUrl === indexUrl);
+                    if (foundIndex !== -1) {
+                        currentIndex = foundIndex;
+                    } else {
+                        currentQueue.unshift({ title, artist, art, audioUrl: indexUrl });
+                        currentIndex = 0;
+                    }
                 }
             } else if (currentQueue.length === 0 || (currentQueue[currentIndex]?.audioUrl !== indexUrl)) {
                 currentQueue = [{ title, artist, art, audioUrl: indexUrl }];
@@ -651,11 +655,18 @@
             // Persist current song state so app restores after mobile reopen
             savePlaybackState(title, artist, art, indexUrl);
             
+            // Set Media Session for lock screen widget (Android/iOS)
             if ('mediaSession' in navigator) {
-                navigator.mediaSession.metadata = new MediaMetadata({
-                    title: title, artist: artist, album: 'The Nocturnal',
-                    artwork: [{ src: art, sizes: '512x512', type: 'image/jpeg' }]
-                });
+                const metadata = {
+                    title: title || 'The Nocturnal',
+                    artist: artist || '',
+                    album: 'The Nocturnal'
+                };
+                // Android Chrome aggressively kills MediaSession if artwork URL is empty or invalid
+                if (art && art.length > 5 && (art.startsWith('http') || art.startsWith('data:'))) {
+                    metadata.artwork = [{ src: art, sizes: '512x512', type: 'image/jpeg' }];
+                }
+                navigator.mediaSession.metadata = new MediaMetadata(metadata);
             }
 
             openPlayerUI();
@@ -699,10 +710,10 @@
                 const file = await getFile(song.audioUrl);
                 if (file) {
                     const url = URL.createObjectURL(file);
-                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl);
+                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
                 }
             } else {
-                openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue);
+                openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue, null, currentIndex);
             }
         } catch (err) {
             console.error("Next song error:", err);
@@ -724,10 +735,10 @@
                 const file = await getFile(song.audioUrl);
                 if (file) {
                     const url = URL.createObjectURL(file);
-                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl);
+                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
                 }
             } else {
-                openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue);
+                openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue, null, currentIndex);
             }
         } catch (err) {
             console.error("Prev song error:", err);
@@ -1565,11 +1576,16 @@
                     showToast('Toca Play para continuar');
                 }
                 // Update mediaSession metadata so lock screen controls work
-                if ('mediaSession' in navigator && saved.title) {
-                    navigator.mediaSession.metadata = new MediaMetadata({
-                        title: saved.title, artist: saved.artist || '', album: 'The Nocturnal',
-                        artwork: [{ src: saved.art, sizes: '512x512', type: 'image/jpeg' }]
-                    });
+                if ('mediaSession' in navigator) {
+                    const metadata = {
+                        title: saved.title || 'The Nocturnal',
+                        artist: saved.artist || '',
+                        album: 'The Nocturnal'
+                    };
+                    if (saved.art && saved.art.length > 5 && (saved.art.startsWith('http') || saved.art.startsWith('data:'))) {
+                        metadata.artwork = [{ src: saved.art, sizes: '512x512', type: 'image/jpeg' }];
+                    }
+                    navigator.mediaSession.metadata = new MediaMetadata(metadata);
                 }
             }
         } catch(e) {}
