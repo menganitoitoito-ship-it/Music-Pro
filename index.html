@@ -586,6 +586,10 @@
     let isPartyMode = false;
     let currentQueue = [];
     let currentIndex = 0;
+    let playlists = JSON.parse(localStorage.getItem('NocturnalPlaylists')) || [];
+    let uploadedSongs = JSON.parse(localStorage.getItem('NocturnalUploadedSongs')) || [];
+    let currentSongToAdd = null;
+    const blobUrlCache = {};
 
     function formatTime(seconds) {
         if (isNaN(seconds)) return "0:00";
@@ -709,11 +713,18 @@
             
             const isIDB = song.audioUrl && song.audioUrl.startsWith('song-');
             if (isIDB) {
-                // If it's an IDB URL, we need to fetch the file again since object URLs expire
-                const file = await getFile(song.audioUrl);
-                if (file) {
-                    const url = URL.createObjectURL(file);
-                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
+                const cachedUrl = blobUrlCache[song.audioUrl];
+                if (cachedUrl) {
+                    openPlayer(song.title, song.artist, song.art, cachedUrl, currentQueue, song.audioUrl, currentIndex);
+                } else {
+                    const file = await getFile(song.audioUrl);
+                    if (file) {
+                        const url = URL.createObjectURL(file);
+                        blobUrlCache[song.audioUrl] = url;
+                        openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
+                    } else {
+                        showToast("Archivo no encontrado");
+                    }
                 }
             } else {
                 openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue, null, currentIndex);
@@ -738,10 +749,18 @@
             
             const isIDB = song.audioUrl && song.audioUrl.startsWith('song-');
             if (isIDB) {
-                const file = await getFile(song.audioUrl);
-                if (file) {
-                    const url = URL.createObjectURL(file);
-                    openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
+                const cachedUrl = blobUrlCache[song.audioUrl];
+                if (cachedUrl) {
+                    openPlayer(song.title, song.artist, song.art, cachedUrl, currentQueue, song.audioUrl, currentIndex);
+                } else {
+                    const file = await getFile(song.audioUrl);
+                    if (file) {
+                        const url = URL.createObjectURL(file);
+                        blobUrlCache[song.audioUrl] = url;
+                        openPlayer(song.title, song.artist, song.art, url, currentQueue, song.audioUrl, currentIndex);
+                    } else {
+                        showToast("Archivo no encontrado");
+                    }
                 }
             } else {
                 openPlayer(song.title, song.artist, song.art, song.audioUrl, currentQueue, null, currentIndex);
@@ -810,7 +829,7 @@
             const src = audio.src;
             // Check if src is missing or invalid (IDB key used as URL, file:// path, etc.)
             const noSrc = !src || src === window.location.href || src === (location.origin + '/');
-            const badSrc = audio.error || (audio.networkState === 3); // NETWORK_NO_SOURCE
+            const badSrc = audio.error;
             if (noSrc || badSrc) {
                 audio.src = ''; // Clear broken src
                 restorePlaybackState();
@@ -854,7 +873,7 @@
             const isIDB = saved.isIDB || (saved.audioUrl && saved.audioUrl.startsWith('song-'));
             if (isIDB) {
                 const song = uploadedSongs.find(s => s.id === saved.audioUrl);
-                if (song) playSongFromIDB(song, [song]);
+                if (song) playSongFromIDB(song, uploadedSongs);
                 else showToast('Canción no disponible. Súbela de nuevo.');
             } else if (saved.audioUrl && !saved.audioUrl.startsWith('blob:')) {
                 audio.src = saved.audioUrl;
@@ -893,9 +912,13 @@
     };
 
     audio.onended = () => {
-        isPlaying = false;
-        localStorage.setItem('NocturnalWasPlaying', 'false');
-        updateUI();
+        if (currentQueue && currentQueue.length > 0) {
+            nextSong();
+        } else {
+            isPlaying = false;
+            localStorage.setItem('NocturnalWasPlaying', 'false');
+            updateUI();
+        }
     };
 
     function updateUI() {
@@ -979,11 +1002,26 @@
             database.createObjectStore(STORE_NAME);
         }
     };
-    request.onsuccess = (e) => { 
+    request.onsuccess = async (e) => { 
         db = e.target.result; 
+        await loadAllSongsIntoCache();
         renderBiblioteca(); 
         updateStats();
     };
+
+    async function loadAllSongsIntoCache() {
+        if (!db) return;
+        try {
+            await Promise.all(uploadedSongs.map(async (song) => {
+                const file = await getFile(song.audioUrl);
+                if (file) {
+                    blobUrlCache[song.audioUrl] = URL.createObjectURL(file);
+                }
+            }));
+        } catch (err) {
+            console.error("Error loading songs into cache:", err);
+        }
+    }
 
     function saveFile(id, file) {
         return new Promise((resolve, reject) => {
@@ -1011,10 +1049,6 @@
         store.delete(id);
     }
 
-    let playlists = JSON.parse(localStorage.getItem('NocturnalPlaylists')) || [];
-    let uploadedSongs = JSON.parse(localStorage.getItem('NocturnalUploadedSongs')) || [];
-    let currentSongToAdd = null;
-
     function savePlaylists() {
         localStorage.setItem('NocturnalPlaylists', JSON.stringify(playlists));
     }
@@ -1023,21 +1057,27 @@
         localStorage.setItem('NocturnalUploadedSongs', JSON.stringify(uploadedSongs));
     }
 
-    async function playSongFromIDB(song, queue) {
+    function playSongFromIDB(song, queue) {
         // Unlock audio context synchronously
         audio.play().catch(()=>{});
         
-        try {
-            const file = await getFile(song.audioUrl);
-            if (file) {
-                const url = URL.createObjectURL(file);
-                // Pass song.audioUrl as originalUrl to keep queue index consistent
-                openPlayer(song.title, song.artist, song.art, url, queue, song.audioUrl);
-            } else {
-                showToast("Archivo no encontrado");
-            }
-        } catch (err) {
-            showToast("Error al cargar la canción");
+        const cachedUrl = blobUrlCache[song.audioUrl];
+        if (cachedUrl) {
+            // Pass song.audioUrl as originalUrl to keep queue index consistent
+            openPlayer(song.title, song.artist, song.art, cachedUrl, queue, song.audioUrl);
+        } else {
+            // Fallback: try fetching on the fly
+            getFile(song.audioUrl).then(file => {
+                if (file) {
+                    const url = URL.createObjectURL(file);
+                    blobUrlCache[song.audioUrl] = url;
+                    openPlayer(song.title, song.artist, song.art, url, queue, song.audioUrl);
+                } else {
+                    showToast("Archivo no encontrado");
+                }
+            }).catch(() => {
+                showToast("Error al cargar la canción");
+            });
         }
     }
 
@@ -1090,6 +1130,11 @@
 
     async function deleteSong(id) {
         if (confirm('¿Eliminar esta canción de tu biblioteca?')) {
+            const cachedUrl = blobUrlCache[id];
+            if (cachedUrl) {
+                URL.revokeObjectURL(cachedUrl);
+                delete blobUrlCache[id];
+            }
             deleteFile(id);
             uploadedSongs = uploadedSongs.filter(s => s.id !== id);
             saveUploadedSongs();
@@ -1468,6 +1513,8 @@
 
             try {
                 await saveFile(id, file);
+                const blobUrl = URL.createObjectURL(file);
+                blobUrlCache[id] = blobUrl;
                 uploadedSongs.push(newSong);
                 saveUploadedSongs();
                 showToast(`Subida: ${songName}`);
