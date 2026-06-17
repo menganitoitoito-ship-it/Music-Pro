@@ -288,12 +288,12 @@
         </button>
         <input type="file" id="song-upload" accept="audio/*" class="hidden" multiple>
         
-        <button class="flex items-center justify-between w-full bg-surface-container-low p-5 rounded-2xl border border-white/5 group">
+        <button onclick="openFavorites()" class="flex items-center justify-between w-full bg-surface-container-low p-5 rounded-2xl border border-white/5 group">
             <div class="flex items-center gap-4">
                 <span class="material-symbols-outlined text-zinc-400 group-hover:text-primary">star</span>
                 <span class="font-bold">Mis Favoritas</span>
             </div>
-            <span class="material-symbols-outlined text-zinc-600">chevron_right</span>
+            <span class="material-symbols-outlined text-zinc-600 group-hover:text-primary">chevron_right</span>
         </button>
     </div>
 </main>
@@ -548,6 +548,20 @@
     </div>
 </div>
 
+<!-- Favorites Overlay -->
+<div id="modal-favorites" class="fixed inset-0 z-50 bg-background translate-x-full transition-transform duration-300 ease-in-out px-6 pt-16 pb-32 overflow-y-auto hide-scrollbar">
+    <div class="flex items-center gap-4 mb-8">
+        <button onclick="closeFavorites()" class="text-zinc-500"><span class="material-symbols-outlined text-3xl">arrow_back</span></button>
+        <h2 class="font-headline text-3xl font-bold tracking-tight">
+            <span class="material-symbols-outlined text-primary align-middle mr-2">star</span>
+            Mis Favoritas
+        </h2>
+    </div>
+    <div id="favorites-container" class="flex flex-col gap-2">
+        <!-- Favorites rendered here -->
+    </div>
+</div>
+
 <!-- Navigation Drawer -->
 <div id="nav-drawer" class="fixed inset-y-0 left-0 w-80 bg-surface-container z-[400] transform -translate-x-full transition-transform duration-300 ease-in-out shadow-2xl flex flex-col">
     <div class="p-6 border-b border-white/5 flex justify-between items-center">
@@ -588,12 +602,15 @@
     let currentIndex = 0;
     let playlists = JSON.parse(localStorage.getItem('NocturnalPlaylists')) || [];
     let uploadedSongs = JSON.parse(localStorage.getItem('NocturnalUploadedSongs')) || [];
+    let favorites = JSON.parse(localStorage.getItem('NocturnalFavorites')) || [];
     let currentSongToAdd = null;
     const blobUrlCache = {};
     let isShuffle = false;
     let repeatMode = 'all'; // 'off' | 'all' | 'one'
     let originalQueue = [];
     let isTransitioningTrack = false;
+    let userInteracted = false;
+    let pendingResume = false;
 
     function formatTime(seconds) {
         if (isNaN(seconds)) return "0:00";
@@ -697,6 +714,7 @@
             }
 
             syncPlayerUI();
+            updateFavIcon();
             if (!document.hidden) {
                 openPlayerUI();
             }
@@ -1117,10 +1135,49 @@
         audio.currentTime = percentage * audio.duration;
     }
 
+    function saveFavorites() {
+        localStorage.setItem('NocturnalFavorites', JSON.stringify(favorites));
+        if (db) {
+            try {
+                const tx = db.transaction(PLAYLIST_STORE, 'readwrite');
+                tx.objectStore(PLAYLIST_STORE).put({ key: 'favorites', data: favorites });
+            } catch(e) {}
+        }
+    }
+
+    function isFavorite(audioUrl) {
+        return favorites.some(s => s.audioUrl === audioUrl);
+    }
+
+    function updateFavIcon() {
+        const btn = document.querySelector('#player-artist').closest('.flex')?.querySelector('button');
+        if (!btn) return;
+        const song = currentQueue[currentIndex];
+        if (!song) return;
+        const fav = isFavorite(song.audioUrl);
+        btn.classList.toggle('text-secondary', fav);
+        btn.querySelector('span').classList.toggle('fill-icon', fav);
+    }
+
     function toggleLike(btn) {
-        btn.classList.toggle('text-secondary');
-        const span = btn.querySelector('span');
-        span.classList.toggle('fill-icon');
+        const song = currentQueue[currentIndex];
+        if (!song) return;
+        const idx = favorites.findIndex(s => s.audioUrl === song.audioUrl);
+        if (idx === -1) {
+            favorites.push({ ...song });
+            btn.classList.add('text-secondary');
+            btn.querySelector('span').classList.add('fill-icon');
+            showToast('Añadida a favoritos');
+        } else {
+            favorites.splice(idx, 1);
+            btn.classList.remove('text-secondary');
+            btn.querySelector('span').classList.remove('fill-icon');
+            showToast('Eliminada de favoritos');
+        }
+        saveFavorites();
+        if (document.getElementById('modal-favorites') && !document.getElementById('modal-favorites').classList.contains('hidden')) {
+            renderFavorites();
+        }
     }
 
     // Load duration when metadata is ready
@@ -1140,17 +1197,21 @@
       });
     }
 
-    // Global iOS Audio Unlocker
-    document.body.addEventListener('touchstart', function() {
-        if (audio.src === "" || audio.paused) {
-            audio.play().catch(()=>{});
+    // Global iOS Audio Unlocker — persistent, flag-based to avoid { once } race conditions
+    function onUserInteraction() {
+        if (userInteracted) return;
+        userInteracted = true;
+        if (audio.paused && audio.src) {
+            resumeAudioContext();
+            audio.play().catch(() => {});
+            if (pendingResume) {
+                pendingResume = false;
+                showToast('Reanudando...');
+            }
         }
-    }, { once: true });
-    document.body.addEventListener('click', function() {
-        if (audio.src === "" || audio.paused) {
-            audio.play().catch(()=>{});
-        }
-    }, { once: true });
+    }
+    document.body.addEventListener('touchstart', onUserInteraction, { passive: true });
+    document.body.addEventListener('click', onUserInteraction);
 
     // --- Persistence (IndexedDB for Files, localStorage for Metadata) ---
     const DB_NAME = 'NocturnalDB';
@@ -1177,6 +1238,13 @@
             if (backedUp && backedUp.length > 0) {
                 playlists = backedUp;
                 savePlaylists();
+            }
+        }
+        if (favorites.length === 0) {
+            const favBackup = await getFavoritesFromIndexedDB();
+            if (favBackup && favBackup.length > 0) {
+                favorites = favBackup;
+                saveFavorites();
             }
         }
         renderPlaylistsScreen();
@@ -1247,6 +1315,21 @@
                 const transaction = db.transaction(PLAYLIST_STORE, 'readonly');
                 const store = transaction.objectStore(PLAYLIST_STORE);
                 const request = store.get('main');
+                request.onsuccess = () => resolve(request.result ? request.result.data : null);
+                request.onerror = () => resolve(null);
+            } catch (err) {
+                resolve(null);
+            }
+        });
+    }
+
+    function getFavoritesFromIndexedDB() {
+        return new Promise((resolve) => {
+            if (!db) return resolve(null);
+            try {
+                const transaction = db.transaction(PLAYLIST_STORE, 'readonly');
+                const store = transaction.objectStore(PLAYLIST_STORE);
+                const request = store.get('favorites');
                 request.onsuccess = () => resolve(request.result ? request.result.data : null);
                 request.onerror = () => resolve(null);
             } catch (err) {
@@ -1777,6 +1860,60 @@
         }
     }
 
+    // --- Favorites ---
+    function openFavorites() {
+        const modal = document.getElementById('modal-favorites');
+        renderFavorites();
+        modal.classList.remove('translate-x-full');
+    }
+
+    function closeFavorites() {
+        document.getElementById('modal-favorites').classList.add('translate-x-full');
+    }
+
+    function renderFavorites() {
+        const container = document.getElementById('favorites-container');
+        container.innerHTML = '';
+        if (favorites.length === 0) {
+            container.innerHTML = '<div class="text-center text-zinc-500 mt-20 opacity-40"><span class="material-symbols-outlined text-6xl mb-4">star_border</span><p class="font-bold">Sin favoritos</p><p class="text-xs mt-2">Marca canciones como favoritas desde el reproductor</p></div>';
+            return;
+        }
+        favorites.forEach((song, idx) => {
+            const div = document.createElement('div');
+            div.className = "flex items-center gap-4 bg-surface-container-low/50 p-3 rounded-xl hover:bg-surface-container transition-colors cursor-pointer group";
+            div.onclick = () => {
+                audio.play().catch(()=>{});
+                const isIDB = song.audioUrl && song.audioUrl.startsWith('song-');
+                if (isIDB) {
+                    playSongFromIDB(song, favorites);
+                } else {
+                    openPlayer(song.title, song.artist, song.art, song.audioUrl, favorites);
+                }
+            };
+            div.innerHTML = `
+                <div class="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0">
+                    <img src="${song.art}" class="w-full h-full object-cover" onerror="this.src='https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=100&auto=format&fit=crop&q=60'" />
+                </div>
+                <div class="flex-grow min-w-0">
+                    <h4 class="font-bold truncate">${song.title}</h4>
+                    <p class="text-[10px] text-zinc-500 truncate">${song.artist}</p>
+                </div>
+                <button onclick="event.stopPropagation(); removeFavorite(${idx})" class="p-2 text-zinc-600 hover:text-error opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span class="material-symbols-outlined text-xl">remove_circle</span>
+                </button>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    function removeFavorite(idx) {
+        favorites.splice(idx, 1);
+        saveFavorites();
+        renderFavorites();
+        updateFavIcon();
+        showToast('Eliminada de favoritos');
+    }
+
     // --- Menu Extras ---
     function logout() {
         if (confirm('¿Cerrar sesión y limpiar datos locales?')) {
@@ -1886,12 +2023,17 @@
                     currentQueue = [{ title: saved.title, artist: saved.artist, art: saved.art, audioUrl: saved.audioUrl }];
                     originalQueue = [...currentQueue];
                     currentIndex = 0;
-                    // Auto-resume if music was playing when the user left
+                    // Auto-resume if music was playing when user left.
+                    // On mobile PWA startup, autoplay is always blocked — set pendingResume
+                    // so first user interaction resumes playback instead.
                     if (wasPlaying) {
-                        audio.play().catch(e => console.warn('Auto-resume blocked:', e));
+                        pendingResume = true;
+                        audio.play().catch(() => {
+                            // Autoplay blocked — user must tap to resume
+                        });
                     }
                 } else if (isIDB && wasPlaying) {
-                    // IDB songs need to be reloaded from DB — show hint
+                    pendingResume = true;
                     showToast('Toca Play para continuar');
                 }
                 // Update mediaSession metadata so lock screen controls work
