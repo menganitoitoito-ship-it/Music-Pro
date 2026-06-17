@@ -593,6 +593,7 @@
     let isShuffle = false;
     let repeatMode = 'all'; // 'off' | 'all' | 'one'
     let originalQueue = [];
+    let isTransitioningTrack = false;
 
     function formatTime(seconds) {
         if (isNaN(seconds)) return "0:00";
@@ -667,15 +668,9 @@
             // Set src — do NOT call audio.load() manually, it resets to HAVE_NOTHING
             // and causes a race condition with play() on iOS Safari.
             // Setting src is enough; play() will initiate loading automatically.
+            // Set transitioning flag before loading new source
+            isTransitioningTrack = true;
             audio.src = audioUrl;
-
-            document.getElementById('player-title').innerText = title;
-            document.getElementById('player-artist').innerText = artist;
-            document.getElementById('player-art').src = art;
-            
-            document.getElementById('mini-title').innerText = title;
-            document.getElementById('mini-artist').innerText = artist;
-            document.getElementById('mini-art').src = art;
 
             // Persist current song state so app restores after mobile reopen
             savePlaybackState(title, artist, art, indexUrl);
@@ -684,18 +679,27 @@
             if ('mediaSession' in navigator) {
                 const metadata = {
                     title: title || 'The Nocturnal',
-                    artist: artist || '',
+                    artist: artist || 'Artista Local',
                     album: 'The Nocturnal'
                 };
-                // Android Chrome aggressively kills MediaSession if artwork URL is empty or invalid
                 if (art && art.length > 5 && (art.startsWith('http') || art.startsWith('data:'))) {
-                    metadata.artwork = [{ src: art, sizes: '512x512', type: 'image/jpeg' }];
+                    metadata.artwork = [
+                        { src: art, sizes: '96x96', type: 'image/jpeg' },
+                        { src: art, sizes: '128x128', type: 'image/jpeg' },
+                        { src: art, sizes: '192x192', type: 'image/jpeg' },
+                        { src: art, sizes: '256x256', type: 'image/jpeg' },
+                        { src: art, sizes: '384x384', type: 'image/jpeg' },
+                        { src: art, sizes: '512x512', type: 'image/jpeg' }
+                    ];
                 }
                 navigator.mediaSession.metadata = new MediaMetadata(metadata);
                 bindMediaSessionHandlers();
             }
 
-            openPlayerUI();
+            syncPlayerUI();
+            if (!document.hidden) {
+                openPlayerUI();
+            }
 
             // Explicitly start playback
             const playPromise = audio.play();
@@ -961,6 +965,7 @@
                 return;
             }
             explicitUserPause = false;
+            resumeAudioContext();
             audio.play().catch(e => {
                 console.error('Playback failed:', e);
                 showToast('Error al reproducir. Intenta de nuevo.');
@@ -1012,6 +1017,7 @@
     }
 
     audio.onplay = () => {
+        isTransitioningTrack = false;
         isPlaying = true;
         explicitUserPause = false;
         localStorage.setItem('NocturnalWasPlaying', 'true');
@@ -1023,12 +1029,17 @@
     };
 
     audio.onpause = () => {
+        if (isTransitioningTrack) return;
         isPlaying = false;
         // Only mark wasPlaying=false if the user explicitly paused it.
-        // If the OS paused it (e.g. app backgrounded on Android), we keep wasPlaying=true
+        // If the OS paused it (e.g. app backgrounded/memory pressure), we keep wasPlaying=true
         // so visibilitychange/pageshow can auto-resume it when returning.
         if (explicitUserPause) {
             localStorage.setItem('NocturnalWasPlaying', 'false');
+        } else {
+            // If paused by OS (AudioContext suspension, memory, etc.),
+            // try to resume AudioContext immediately in case the page is still visible
+            resumeAudioContext();
         }
         if ('mediaSession' in navigator) {
             navigator.mediaSession.playbackState = 'paused';
@@ -1037,8 +1048,17 @@
     };
 
     audio.onended = () => {
-        if (currentQueue && currentQueue.length > 0) {
-            nextSong();
+        if (repeatMode === 'one') {
+            audio.currentTime = 0;
+            audio.play().catch(e => console.warn("Repeat one play blocked:", e));
+        } else if (currentQueue && currentQueue.length > 0) {
+            if (currentIndex === currentQueue.length - 1 && repeatMode === 'off') {
+                isPlaying = false;
+                localStorage.setItem('NocturnalWasPlaying', 'false');
+                updateUI();
+            } else {
+                nextSong();
+            }
         } else {
             isPlaying = false;
             localStorage.setItem('NocturnalWasPlaying', 'false');
@@ -1046,7 +1066,23 @@
         }
     };
 
+    function syncPlayerUI() {
+        if (document.hidden) return;
+        const song = currentQueue[currentIndex];
+        if (song) {
+            document.getElementById('player-title').innerText = song.title;
+            document.getElementById('player-artist').innerText = song.artist || 'Artista Local';
+            document.getElementById('player-art').src = song.art;
+            
+            document.getElementById('mini-title').innerText = song.title;
+            document.getElementById('mini-artist').innerText = song.artist || 'Artista Local';
+            document.getElementById('mini-art').src = song.art;
+        }
+        updateUI();
+    }
+
     function updateUI() {
+        if (document.hidden) return;
         // Always derive state from audio.paused (real DOM state) to avoid sync bugs
         const playing = !audio.paused;
         const icon = playing ? 'pause' : 'play_arrow';
@@ -1064,6 +1100,7 @@
     }
 
     audio.ontimeupdate = () => {
+        if (document.hidden) return;
         const percent = (audio.currentTime / audio.duration) * 100;
         document.getElementById('player-progress').style.width = `${percent}%`;
         document.getElementById('mini-progress').style.width = `${percent}%`;
@@ -1118,18 +1155,31 @@
     // --- Persistence (IndexedDB for Files, localStorage for Metadata) ---
     const DB_NAME = 'NocturnalDB';
     const STORE_NAME = 'audioFiles';
+    const PLAYLIST_STORE = 'playlists';
     let db;
 
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(DB_NAME, 2);
     request.onupgradeneeded = (e) => {
         const database = e.target.result;
         if (!database.objectStoreNames.contains(STORE_NAME)) {
             database.createObjectStore(STORE_NAME);
         }
+        if (!database.objectStoreNames.contains(PLAYLIST_STORE)) {
+            database.createObjectStore(PLAYLIST_STORE, { keyPath: 'key' });
+        }
     };
     request.onsuccess = async (e) => { 
         db = e.target.result; 
         await loadAllSongsIntoCache();
+        // Try to restore playlists from IndexedDB if localStorage was cleared
+        if (playlists.length === 0) {
+            const backedUp = await getPlaylistsFromIndexedDB();
+            if (backedUp && backedUp.length > 0) {
+                playlists = backedUp;
+                savePlaylists();
+            }
+        }
+        renderPlaylistsScreen();
         renderBiblioteca(); 
         updateStats();
     };
@@ -1176,6 +1226,33 @@
 
     function savePlaylists() {
         localStorage.setItem('NocturnalPlaylists', JSON.stringify(playlists));
+        savePlaylistsToIndexedDB();
+    }
+
+    function savePlaylistsToIndexedDB() {
+        if (!db) return;
+        try {
+            const transaction = db.transaction(PLAYLIST_STORE, 'readwrite');
+            const store = transaction.objectStore(PLAYLIST_STORE);
+            store.put({ key: 'main', data: playlists });
+        } catch (err) {
+            console.warn('IDB backup failed:', err);
+        }
+    }
+
+    function getPlaylistsFromIndexedDB() {
+        return new Promise((resolve) => {
+            if (!db) return resolve(null);
+            try {
+                const transaction = db.transaction(PLAYLIST_STORE, 'readonly');
+                const store = transaction.objectStore(PLAYLIST_STORE);
+                const request = store.get('main');
+                request.onsuccess = () => resolve(request.result ? request.result.data : null);
+                request.onerror = () => resolve(null);
+            } catch (err) {
+                resolve(null);
+            }
+        });
     }
 
     function saveUploadedSongs() {
@@ -1547,11 +1624,23 @@
     
     // --- Equalizer (Web Audio API) ---
     let audioContext, source, filters = [];
+    let equalizerActive = false;
     const frequencies = [60, 230, 1000, 4000, 14000];
+
+    function resumeAudioContext() {
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume().catch(() => {});
+        }
+    }
 
     function initEqualizer() {
         if (audioContext) return;
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioContext.onstatechange = () => {
+            if (audioContext.state === 'suspended') {
+                audioContext.resume().catch(() => {});
+            }
+        };
         source = audioContext.createMediaElementSource(audio);
         
         frequencies.forEach(freq => {
@@ -1563,11 +1652,38 @@
             filters.push(filter);
         });
         
+        // Connect through filters by default (will be bypassed until equalizer opens)
         source.connect(filters[0]);
         for (let i = 0; i < filters.length - 1; i++) {
             filters[i].connect(filters[i+1]);
         }
         filters[filters.length - 1].connect(audioContext.destination);
+    }
+
+    function connectEqualizer() {
+        if (!audioContext || !source) return;
+        // Disconnect from direct destination
+        try { source.disconnect(); } catch(e) {}
+        // Reconnect through filters
+        source.connect(filters[0]);
+        for (let i = 0; i < filters.length - 1; i++) {
+            try { filters[i].disconnect(); } catch(e) {}
+            filters[i].connect(filters[i+1]);
+        }
+        filters[filters.length - 1].connect(audioContext.destination);
+        equalizerActive = true;
+    }
+
+    function bypassEqualizer() {
+        if (!audioContext || !source) return;
+        // Disconnect from filter chain
+        try { source.disconnect(); } catch(e) {}
+        for (let i = 0; i < filters.length; i++) {
+            try { filters[i].disconnect(); } catch(e) {}
+        }
+        // Connect source directly to destination (bypass filters)
+        source.connect(audioContext.destination);
+        equalizerActive = false;
     }
 
     function updateEQ(index, val) {
@@ -1588,6 +1704,7 @@
         modal.classList.remove('opacity-0');
         modal.querySelector('div').classList.remove('scale-95');
         initEqualizer();
+        connectEqualizer();
     }
 
     function closeEqualizer() {
@@ -1595,6 +1712,7 @@
         modal.classList.add('opacity-0');
         modal.querySelector('div').classList.add('scale-95');
         setTimeout(() => modal.classList.add('hidden'), 300);
+        bypassEqualizer();
     }
 
     // --- Drawer & Upload ---
@@ -1806,6 +1924,17 @@
     // visibilitychange: fires when user comes back to the app tab from background
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
+            // Resume AudioContext if suspended (common on iOS/mobile)
+            resumeAudioContext();
+
+            syncPlayerUI();
+            if (audio.duration) {
+                const percent = (audio.currentTime / audio.duration) * 100;
+                document.getElementById('player-progress').style.width = `${percent}%`;
+                document.getElementById('mini-progress').style.width = `${percent}%`;
+                document.getElementById('player-current-time').innerText = formatTime(audio.currentTime);
+                document.getElementById('player-duration').innerText = formatTime(audio.duration);
+            }
             const wasPlaying = localStorage.getItem('NocturnalWasPlaying') === 'true';
             if (wasPlaying && audio.src && audio.paused && !audio.ended) {
                 explicitUserPause = false;

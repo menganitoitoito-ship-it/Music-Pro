@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nocturnal-v5';
+const CACHE_NAME = 'nocturnal-v6';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
