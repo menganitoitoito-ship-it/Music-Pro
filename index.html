@@ -172,8 +172,8 @@
 <span class="material-symbols-outlined text-2xl" data-icon="menu_open">menu_open</span>
 </button>
 <h1 class="text-2xl font-bold tracking-tighter text-[#E2FF3B] font-['Space_Grotesk'] uppercase">THE NOCTURNAL</h1>
-<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-primary/20">
-<img alt="User Profile" data-alt="Close-up portrait of a stylish person with neon rim lighting in a dark urban setting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5T3hC8L4iRHjGe5T4MarJjyWHvgMokArSa43VvRlQMhd6-U0qowEeT0RcRaP1wmyBSGZX36kf8Q584Cn523f3ffukR_kDlX7NrFZSX9APSpJkTlzA3SgL4ZG0sYdOKGCkhIAKw6-ocMwUZLhvcgcVI37bUWdZu_8Kb9AUATqspZEVGqcCDEbHkXKdGo_54c9Uua4urrAaJCNgg1HJ2NaQq0s_lQnOMwXZIag8ewdn_zhDjhjAV6zvsYcnvU3Io7ow23_wXmJvYBOm"/>
+<div id="header-avatar" class="w-10 h-10 rounded-full overflow-hidden border-2 border-primary/20 cursor-pointer" onclick="document.getElementById('profile-photo-input').click()">
+<img id="header-avatar-img" alt="User Profile" data-alt="Close-up portrait of a stylish person with neon rim lighting in a dark urban setting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5T3hC8L4iRHjGe5T4MarJjyWHvgMokArSa43VvRlQMhd6-U0qowEeT0RcRaP1wmyBSGZX36kf8Q584Cn523f3ffukR_kDlX7NrFZSX9APSpJkTlzA3SgL4ZG0sYdOKGCkhIAKw6-ocMwUZLhvcgcVI37bUWdZu_8Kb9AUATqspZEVGqcCDEbHkXKdGo_54c9Uua4urrAaJCNgg1HJ2NaQq0s_lQnOMwXZIag8ewdn_zhDjhjAV6zvsYcnvU3Io7ow23_wXmJvYBOm"/>
 </div>
 </header>
 <!-- PANTALLA: EXPLORAR -->
@@ -262,12 +262,22 @@
 </main>
 <!-- PANTALLA: PERFIL -->
 <main class="page pt-24 px-6 text-center" id="perfil">
-    <div class="flex flex-col items-center mb-12">
-        <div class="w-32 h-32 rounded-full overflow-hidden border-4 border-primary/20 p-1 mb-4">
-            <img alt="User" class="w-full h-full rounded-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5T3hC8L4iRHjGe5T4MarJjyWHvgMokArSa43VvRlQMhd6-U0qowEeT0RcRaP1wmyBSGZX36kf8Q584Cn523f3ffukR_kDlX7NrFZSX9APSpJkTlzA3SgL4ZG0sYdOKGCkhIAKw6-ocMwUZLhvcgcVI37bUWdZu_8Kb9AUATqspZEVGqcCDEbHkXKdGo_54c9Uua4urrAaJCNgg1HJ2NaQq0s_lQnOMwXZIag8ewdn_zhDjhjAV6zvsYcnvU3Io7ow23_wXmJvYBOm"/>
+    <div class="flex flex-col items-center mb-8">
+        <div id="profile-photo-wrapper" class="w-32 h-32 rounded-full overflow-hidden border-4 border-primary/20 p-1 mb-4 cursor-pointer group relative" onclick="document.getElementById('profile-photo-input').click()">
+            <img id="profile-photo" alt="User" class="w-full h-full rounded-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5T3hC8L4iRHjGe5T4MarJjyWHvgMokArSa43VvRlQMhd6-U0qowEeT0RcRaP1wmyBSGZX36kf8Q584Cn523f3ffukR_kDlX7NrFZSX9APSpJkTlzA3SgL4ZG0sYdOKGCkhIAKw6-ocMwUZLhvcgcVI37bUWdZu_8Kb9AUATqspZEVGqcCDEbHkXKdGo_54c9Uua4urrAaJCNgg1HJ2NaQq0s_lQnOMwXZIag8ewdn_zhDjhjAV6zvsYcnvU3Io7ow23_wXmJvYBOm"/>
+            <div class="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <span class="material-symbols-outlined text-white text-3xl">camera_alt</span>
+            </div>
         </div>
-        <h2 class="text-3xl font-bold font-headline">Nocturnal User</h2>
-        <p class="text-zinc-500 font-medium">@nocturnal_vibe</p>
+        <input type="file" id="profile-photo-input" accept="image/*" class="hidden">
+
+        <div class="flex items-center gap-2 mb-1">
+            <h2 id="profile-name" class="text-3xl font-bold font-headline">Nocturnal User</h2>
+            <button onclick="editProfileName()" class="text-zinc-500 hover:text-primary transition-colors">
+                <span class="material-symbols-outlined text-xl">edit</span>
+            </button>
+        </div>
+        <p class="text-zinc-500 font-medium" id="profile-username">@nocturnal_vibe</p>
     </div>
 
     <div class="grid grid-cols-2 gap-4 mb-12">
@@ -603,6 +613,11 @@
     let playlists = JSON.parse(localStorage.getItem('NocturnalPlaylists')) || [];
     let uploadedSongs = JSON.parse(localStorage.getItem('NocturnalUploadedSongs')) || [];
     let favorites = JSON.parse(localStorage.getItem('NocturnalFavorites')) || [];
+    let profileData = JSON.parse(localStorage.getItem('NocturnalProfile')) || {
+        name: 'Nocturnal User',
+        username: '@nocturnal_vibe',
+        photo: 'https://lh3.googleusercontent.com/aida-public/AB6AXuA5T3hC8L4iRHjGe5T4MarJjyWHvgMokArSa43VvRlQMhd6-U0qowEeT0RcRaP1wmyBSGZX36kf8Q584Cn523f3ffukR_kDlX7NrFZSX9APSpJkTlzA3SgL4ZG0sYdOKGCkhIAKw6-ocMwUZLhvcgcVI37bUWdZu_8Kb9AUATqspZEVGqcCDEbHkXKdGo_54c9Uua4urrAaJCNgg1HJ2NaQq0s_lQnOMwXZIag8ewdn_zhDjhjAV6zvsYcnvU3Io7ow23_wXmJvYBOm'
+    };
     let currentSongToAdd = null;
     const blobUrlCache = {};
     let isShuffle = false;
@@ -636,7 +651,7 @@
         
         if (screenId === 'playlists') renderPlaylistsScreen();
         if (screenId === 'biblioteca') renderBiblioteca();
-        if (screenId === 'perfil') updateStats();
+        if (screenId === 'perfil') { updateStats(); renderProfile(); }
     }
 
     function openPlayer(title, artist, art, audioUrl, queue = null, originalUrl = null, forceIndex = null) {
@@ -2015,8 +2030,110 @@
         setTimeout(() => modal.classList.add('hidden'), 300);
     }
 
+    // --- Profile ---
+    function saveProfile() {
+        localStorage.setItem('NocturnalProfile', JSON.stringify(profileData));
+    }
+
+    function renderProfile() {
+        document.getElementById('profile-photo').src = profileData.photo;
+        document.getElementById('header-avatar-img').src = profileData.photo;
+        document.getElementById('profile-name').innerText = profileData.name;
+        document.getElementById('profile-username').innerText = profileData.username;
+    }
+
+    function editProfileName() {
+        const newName = prompt('Nombre de usuario:', profileData.name);
+        if (newName && newName.trim()) {
+            profileData.name = newName.trim();
+            profileData.username = '@' + newName.trim().toLowerCase().replace(/\s+/g, '_');
+            saveProfile();
+            renderProfile();
+        }
+    }
+
+    // Profile photo upload
+    document.addEventListener('change', function(e) {
+        if (e.target.id === 'profile-photo-input' && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                profileData.photo = ev.target.result;
+                saveProfile();
+                renderProfile();
+                showToast('Foto de perfil actualizada');
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // --- Android Back Button Prevention ---
+    let backPressCount = 0;
+    let backPressTimer = null;
+
+    function handleBackPress() {
+        if (document.getElementById('full-player').classList.contains('translate-y-0')) {
+            closePlayer();
+            return;
+        }
+        if (document.getElementById('playlist-details') && !document.getElementById('playlist-details').classList.contains('translate-x-full')) {
+            closePlaylistDetails();
+            return;
+        }
+        if (document.getElementById('modal-favorites') && !document.getElementById('modal-favorites').classList.contains('translate-x-full')) {
+            closeFavorites();
+            return;
+        }
+        if (isPlaying) {
+            backPressCount++;
+            if (backPressCount === 1) {
+                showToast('Presiona atrás otra vez para salir');
+                backPressTimer = setTimeout(() => { backPressCount = 0; }, 2000);
+            } else {
+                clearTimeout(backPressTimer);
+                backPressCount = 0;
+                if (confirm('¿Cerrar la app? La música se detendrá.')) {
+                    localStorage.setItem('NocturnalWasPlaying', 'false');
+                    try { window.close(); } catch(e) {}
+                    window.history.back();
+                } else {
+                    window.history.pushState({ app: true }, '', '');
+                }
+            }
+        } else {
+            backPressCount++;
+            if (backPressCount === 1) {
+                showToast('Presiona atrás otra vez para salir');
+                backPressTimer = setTimeout(() => { backPressCount = 0; }, 2000);
+            } else {
+                clearTimeout(backPressTimer);
+                backPressCount = 0;
+                if (confirm('¿Salir de la app?')) {
+                    try { window.close(); } catch(e) {}
+                    window.history.back();
+                } else {
+                    window.history.pushState({ app: true }, '', '');
+                }
+            }
+        }
+    }
+
+    window.addEventListener('popstate', (e) => {
+        if (e.state && e.state.app) {
+            handleBackPress();
+        } else {
+            // First popstate or external nav — intercept it
+            window.history.pushState({ app: true }, '', '');
+            handleBackPress();
+        }
+    });
+
+    // Push initial history state
+    window.history.pushState({ app: true }, '', '');
+
     // Initial Render
     document.addEventListener('DOMContentLoaded', () => {
+        renderProfile();
         renderPlaylistsScreen();
         renderBiblioteca();
         updateStats();
