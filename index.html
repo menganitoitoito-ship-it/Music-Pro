@@ -324,7 +324,7 @@
 </div>
 </div>
 </div>
-<button class="text-zinc-500" onclick="toggleLike(this)">
+<button id="player-fav-btn" class="text-zinc-500" onclick="toggleLike(this)">
 <span class="material-symbols-outlined text-3xl" data-icon="favorite">favorite</span>
 </button>
 </div>
@@ -1150,7 +1150,7 @@
     }
 
     function updateFavIcon() {
-        const btn = document.querySelector('#player-artist').closest('.flex')?.querySelector('button');
+        const btn = document.getElementById('player-fav-btn');
         if (!btn) return;
         const song = currentQueue[currentIndex];
         if (!song) return;
@@ -1520,7 +1520,7 @@
                     <h4 class="font-bold truncate">${song.title}</h4>
                     <p class="text-[10px] text-zinc-500 truncate">${song.artist}</p>
                 </div>
-                <button onclick="event.stopPropagation(); removeSongFromPlaylist(${idx})" class="p-2 text-zinc-600 hover:text-error opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onclick="event.stopPropagation(); removeSongFromPlaylist(${idx})" class="p-2 text-zinc-500 hover:text-error transition-all hover:scale-110 active:scale-90">
                     <span class="material-symbols-outlined text-xl">remove_circle</span>
                 </button>
             `;
@@ -1714,10 +1714,17 @@
         if (audioContext && audioContext.state === 'suspended') {
             audioContext.resume().catch(() => {});
         }
+        // Also handle the common mobile case where AudioContext was closed
+        // but equalizer is no longer in use — just let native audio play
     }
 
     function initEqualizer() {
-        if (audioContext) return;
+        if (audioContext && audioContext.state !== 'closed') return;
+        if (audioContext && audioContext.state === 'closed') {
+            audioContext = null;
+            source = null;
+            filters = [];
+        }
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         audioContext.onstatechange = () => {
             if (audioContext.state === 'suspended') {
@@ -1757,16 +1764,39 @@
         equalizerActive = true;
     }
 
-    function bypassEqualizer() {
-        if (!audioContext || !source) return;
-        // Disconnect from filter chain
-        try { source.disconnect(); } catch(e) {}
-        for (let i = 0; i < filters.length; i++) {
-            try { filters[i].disconnect(); } catch(e) {}
-        }
-        // Connect source directly to destination (bypass filters)
-        source.connect(audioContext.destination);
+    function destroyEqualizer() {
+        if (!audioContext) return;
+        try {
+            if (source) {
+                try { source.disconnect(); } catch(e) {}
+                source = null;
+            }
+            for (let i = 0; i < filters.length; i++) {
+                try { filters[i].disconnect(); } catch(e) {}
+            }
+            filters = [];
+            audioContext.close().catch(() => {});
+        } catch(e) {}
+        audioContext = null;
         equalizerActive = false;
+
+        // Re-create the audio element's native path by reloading current position
+        // Once createMediaElementSource is called, audio goes through AudioContext.
+        // To truly break free, we need to re-assign the audio src.
+        if (audio.src && !audio.paused) {
+            const pos = audio.currentTime;
+            const wasPlaying = true;
+            const src = audio.src;
+            audio.src = '';
+            // Small timeout to let the audio element reset
+            setTimeout(() => {
+                audio.src = src;
+                audio.currentTime = pos;
+                if (wasPlaying) {
+                    audio.play().catch(() => {});
+                }
+            }, 50);
+        }
     }
 
     function updateEQ(index, val) {
@@ -1786,8 +1816,16 @@
         void modal.offsetWidth;
         modal.classList.remove('opacity-0');
         modal.querySelector('div').classList.remove('scale-95');
+        // Re-init if previously destroyed
+        if (!audioContext || audioContext.state === 'closed') {
+            audioContext = null;
+            source = null;
+            filters = [];
+        }
         initEqualizer();
-        connectEqualizer();
+        if (!equalizerActive) {
+            connectEqualizer();
+        }
     }
 
     function closeEqualizer() {
@@ -1795,7 +1833,7 @@
         modal.classList.add('opacity-0');
         modal.querySelector('div').classList.add('scale-95');
         setTimeout(() => modal.classList.add('hidden'), 300);
-        bypassEqualizer();
+        destroyEqualizer();
     }
 
     // --- Drawer & Upload ---
@@ -2063,12 +2101,19 @@
         }
     });
 
-    // visibilitychange: fires when user comes back to the app tab from background
+    // visibilitychange: fires when user leaves/returns to the app tab
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-            // Resume AudioContext if suspended (common on iOS/mobile)
+        if (document.visibilityState === 'hidden') {
+            // Save playback state when going to background
+            if (isPlaying) {
+                localStorage.setItem('NocturnalWasPlaying', 'true');
+                const song = currentQueue[currentIndex];
+                if (song) {
+                    savePlaybackState(song.title, song.artist, song.art, song.audioUrl);
+                }
+            }
+        } else if (document.visibilityState === 'visible') {
             resumeAudioContext();
-
             syncPlayerUI();
             if (audio.duration) {
                 const percent = (audio.currentTime / audio.duration) * 100;
@@ -2080,9 +2125,49 @@
             const wasPlaying = localStorage.getItem('NocturnalWasPlaying') === 'true';
             if (wasPlaying && audio.src && audio.paused && !audio.ended) {
                 explicitUserPause = false;
-                audio.play().catch(e => console.warn('visibilitychange resume failed:', e));
+                audio.play().catch(e => {
+                    console.warn('visibilitychange resume failed, will retry:', e);
+                    // iOS often needs a small delay + user interaction context to resume
+                    setTimeout(() => {
+                        if (audio.paused && audio.src) {
+                            resumeAudioContext();
+                            audio.play().catch(() => {});
+                        }
+                    }, 300);
+                });
             }
         }
     });
+
+    // pagehide: fires when user navigates away or app goes to background (mobile)
+    window.addEventListener('pagehide', () => {
+        if (isPlaying) {
+            localStorage.setItem('NocturnalWasPlaying', 'true');
+        } else if (explicitUserPause) {
+            localStorage.setItem('NocturnalWasPlaying', 'false');
+        }
+    });
+
+    // beforeunload: save state when tab is closed
+    window.addEventListener('beforeunload', () => {
+        if (isPlaying) {
+            localStorage.setItem('NocturnalWasPlaying', 'true');
+        }
+    });
+
+    // Add audio error handler for resilience
+    audio.onerror = () => {
+        console.warn('Audio error, attempting recovery');
+        if (currentQueue.length > 0) {
+            const song = currentQueue[currentIndex];
+            if (song && audio.error) {
+                // Try next song in queue on fatal error
+                if (audio.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+                    audio.error.code === MediaError.MEDIA_ERR_DECODE) {
+                    nextSong();
+                }
+            }
+        }
+    };
 </script>
 </body></html>
